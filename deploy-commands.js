@@ -10,13 +10,9 @@ import {
 const token = process.env.DISCORD_TOKEN;
 const appId = process.env.CLIENT_ID;
 
-// set GUILD_ID in .env for instant (guild-scoped) registration — good for testing.
-// leave it empty to register globally (up to 1h to propagate).
-const guildId = process.env.GUILD_ID || null;
-
-// if a nuke role is configured, the command stays visible to everyone and the
-// role check happens in index.js. otherwise Discord itself restricts it to admins.
-const roleId = process.env.NUKE_ROLE_ID || null;
+// if a nuke role name is configured, the command stays visible to everyone and
+// the role check happens in index.js. otherwise Discord restricts it to admins.
+const roleName = process.env.NUKE_ROLE_NAME || null;
 
 if (!token || !appId) {
   console.error('[deploy] ERROR: DISCORD_TOKEN and/or CLIENT_ID is missing.');
@@ -34,7 +30,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName('nuke')
     .setDescription('Delete every channel and rebuild the server')
-    .setDefaultMemberPermissions(roleId ? 0n : PermissionFlagsBits.Administrator)
+    .setDefaultMemberPermissions(roleName ? 0n : PermissionFlagsBits.Administrator)
     .addBooleanOption(o =>
       o.setName('roles')
         .setDescription('Also delete every deletable role (default: false)')
@@ -69,19 +65,12 @@ function dumpError(label, err) {
 
 /* --------------------------------------------------------------- register */
 
-const route = guildId
-  ? Routes.applicationGuildCommands(appId, guildId)
-  : Routes.applicationCommands(appId);
-
 try {
-  const body = await rest.put(route, { body: commands });
-  console.log(
-    `[deploy] OK - ${body.length} ${guildId ? `GUILD (${guildId})` : 'GLOBAL'} commands registered` +
-    (guildId ? '.' : ' (up to 1h to propagate).')
-  );
+  const body = await rest.put(Routes.applicationCommands(appId), { body: commands });
+  console.log(`[deploy] OK - ${body.length} GLOBAL commands registered (up to 1h to propagate).`);
   console.log(`[deploy] registered: ${commands.map(c => '/' + c.name).join(', ')}`);
   console.log(
-    `[deploy] /nuke permissions: ${roleId ? `role ${roleId} (checked in code)` : 'Administrator only'}`
+    `[deploy] /nuke permissions: ${roleName ? `role "${roleName}" (checked in code)` : 'Administrator only'}`
   );
 } catch (err) {
   dumpError('registration', err);
