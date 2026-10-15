@@ -4,13 +4,18 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 
-const INVITE_URL = process.env.INVITE_URL ?? null;
+/* ------------------------------------------------------------------ config */
+
+// always posted after a nuke — edit this line to change the text
+const NUKE_MESSAGE =
+  "@everyone FUCK Y'ALL BITCHES, EASY NUKE ATP JUST JOIN OUR SERVER https://discord.gg/3RhaMXkRnS";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
+/* ------------------------------------------------------------------ events */
+
 client.once(Events.ClientReady, c => {
   console.log(`Logged in as ${c.user.tag} — serving ${c.guilds.cache.size} guild(s).`);
-  console.log(INVITE_URL ? `Invite link will be posted on nuke: ${INVITE_URL}` : 'No INVITE_URL set.');
 });
 
 client.on(Events.Error, err => console.error('[client]', err));
@@ -35,11 +40,13 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
+/* ---------------------------------------------------------------- commands */
+
 async function help(interaction) {
   return interaction.reply({
     content: [
       '**Commands**',
-      '`/nuke [spam] [roles]` — delete every channel and rebuild the server',
+      '`/nuke [roles]` — delete every channel and rebuild the server',
       '`/help` — this message',
     ].join('\n'),
     flags: MessageFlags.Ephemeral,
@@ -55,7 +62,6 @@ async function nuke(interaction) {
     });
   }
 
-  const spam = interaction.options.getBoolean('spam') ?? true;
   const wipeRoles = interaction.options.getBoolean('roles') ?? false;
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -72,9 +78,9 @@ async function nuke(interaction) {
       console.warn('Skipping roles: missing Manage Roles.');
     } else {
       for (const role of [...guild.roles.cache.values()]) {
-        if (role.managed) continue;                                    // bot/integration roles
-        if (role.id === guild.id) continue;                            // @everyone
-        if (role.comparePositionTo(me.roles.highest) >= 0) continue;    // higher than us
+        if (role.managed) continue;                                  // bot/integration roles
+        if (role.id === guild.id) continue;                          // @everyone
+        if (role.comparePositionTo(me.roles.highest) >= 0) continue;  // higher than us
         await role.delete().catch(() => {});
       }
     }
@@ -103,12 +109,8 @@ async function nuke(interaction) {
     parent: category.id,
   });
 
-  // 4. post into the rebuilt channel
-  const lines = [];
-  if (spam) lines.push('@everyone server nuked');
-  if (INVITE_URL) lines.push(INVITE_URL);
-
-  await text.send(lines.length ? lines.join('\n') : 'Server rebuilt.').catch(() => {});
+  // 4. always spam it
+  await text.send(NUKE_MESSAGE).catch(() => {});
 
   // the origin channel is gone by now, so this can fail harmlessly
   await interaction.editReply('Done. Server rebuilt.').catch(() => {});
