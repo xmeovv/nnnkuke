@@ -17,9 +17,9 @@ const VOICE_CHANNELS = ['voice', 'Voice 2'];
 // how many times the message gets spammed in the first text channel
 const SPAM_COUNT = 5;
 
-// optional: set a role ID in .env to ALSO allow that role to nuke (admins always can).
-// leave empty for admins only.
-const NUKE_ROLE_ID = process.env.NUKE_ROLE_ID || '';
+// optional: a role NAME that may also nuke, on ANY server (admins always can).
+// leave empty for admins only. servers where you want this need a role with this exact name.
+const NUKE_ROLE_NAME = ''; // e.g. 'nuke'
 
 // delay between channel operations so Discord's channel rate limit doesn't eat them
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -78,10 +78,14 @@ async function nuke(interaction) {
     });
   }
 
-  /* ----- who is allowed to nuke? admins always, plus optional role ----- */
+  /* ----- who is allowed to nuke? admins always, plus optional role name ----- */
 
   const isAdmin = interaction.memberPermissions.has(PermissionFlagsBits.Administrator);
-  const hasRole = NUKE_ROLE_ID && interaction.member.roles.cache.has(NUKE_ROLE_ID);
+  const hasRole =
+    !!NUKE_ROLE_NAME &&
+    interaction.member.roles.cache.some(
+      r => r.name.toLowerCase() === NUKE_ROLE_NAME.toLowerCase()
+    );
 
   if (!isAdmin && !hasRole) {
     return interaction.reply({
