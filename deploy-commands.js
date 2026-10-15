@@ -9,6 +9,10 @@ import {
 const token = process.env.DISCORD_TOKEN;
 const appId = process.env.CLIENT_ID;
 
+// set GUILD_ID in .env for instant (guild-scoped) registration — good for testing.
+// leave it empty to register globally (up to 1h to propagate).
+const guildId = process.env.GUILD_ID || null;
+
 if (!token || !appId) {
   console.error('[deploy] ERROR: DISCORD_TOKEN and/or CLIENT_ID is missing.');
   process.exit(1);
@@ -59,9 +63,16 @@ function dumpError(label, err) {
 
 /* --------------------------------------------------------------- register */
 
+const route = guildId
+  ? Routes.applicationGuildCommands(appId, guildId)
+  : Routes.applicationCommands(appId);
+
 try {
-  const body = await rest.put(Routes.applicationCommands(appId), { body: commands });
-  console.log(`[deploy] OK - ${body.length} GLOBAL commands registered (up to 1h to propagate).`);
+  const body = await rest.put(route, { body: commands });
+  console.log(
+    `[deploy] OK - ${body.length} ${guildId ? `GUILD (${guildId})` : 'GLOBAL'} commands registered` +
+    (guildId ? '.' : ' (up to 1h to propagate).')
+  );
   console.log(`[deploy] registered: ${commands.map(c => '/' + c.name).join(', ')}`);
 } catch (err) {
   dumpError('registration', err);
