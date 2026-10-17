@@ -16,15 +16,15 @@ const CHANNEL_BASE = '⛧•Kxrzt-owns-yall❗️';
 const NUMBER_FIRST_CHANNEL = false;
 
 const CATEGORY_NAME = 'general';
-const TEXT_COUNT    = 25;
-const VOICE_COUNT   = 15;
+const TEXT_COUNT    = 26;
+const VOICE_COUNT   = 16;
 const SPAM_COUNT    = 45;   // messages per text channel
 
 // also blast the same message into every voice channel's text chat
 // ("call messages"). voice chats have their own per-channel rate-limit bucket,
 // so this is free extra coverage — it just takes longer to drain.
 const VOICE_SPAM       = true;
-const VOICE_SPAM_COUNT = 12;   // messages per voice channel
+const VOICE_SPAM_COUNT = 45;   // messages per voice channel
 
 // optional: role NAME that may also nuke (admins always can). now read from .env
 const NUKE_ROLE_NAME = process.env.NUKE_ROLE_NAME ?? '';
