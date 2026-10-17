@@ -20,6 +20,12 @@ const TEXT_COUNT    = 25;
 const VOICE_COUNT   = 15;
 const SPAM_COUNT    = 45;   // messages per text channel
 
+// also blast the same message into every voice channel's text chat
+// ("call messages"). voice chats have their own per-channel rate-limit bucket,
+// so this is free extra coverage — it just takes longer to drain.
+const VOICE_SPAM       = true;
+const VOICE_SPAM_COUNT = 12;   // messages per voice channel
+
 // optional: role NAME that may also nuke (admins always can). now read from .env
 const NUKE_ROLE_NAME = process.env.NUKE_ROLE_NAME ?? '';
 
@@ -88,6 +94,7 @@ async function sendSafe(sender, content, retries = 6) {
       return sendSafe(sender, content, retries - 1);
     }
     if (status === 404) return;             // channel/webhook got deleted
+    if (status === 403) return;             // voice channel with text chat disabled
     console.error('[send]', err.message);
   }
 }
@@ -109,7 +116,7 @@ async function createSafe(guild, options, retries = 6) {
 /* ------------------------------------------------------------------ spam */
 
 // fires every send for ONE channel without awaiting them one by one
-async function spamChannel(channel) {
+async function spamChannel(channel, count = SPAM_COUNT) {
   const senders = [];
 
   if (USE_WEBHOOKS) {
@@ -128,7 +135,7 @@ async function spamChannel(channel) {
   senders.push({ channel });
 
   const jobs = [];
-  for (let i = 0; i < SPAM_COUNT; i++) {
+  for (let i = 0; i < count; i++) {
     jobs.push(sendSafe(senders[i % senders.length], NUKE_MESSAGE));
   }
 
@@ -242,7 +249,9 @@ async function nuke(interaction) {
   });
 
   /* 4. create + spam PIPELINE: each text channel starts blasting the moment it
-        exists, while the remaining channels are still being created */
+        exists, while the remaining channels are still being created. voice
+        channels get the same treatment so their text chats ("call messages")
+        are filled too. */
   const specs = [
     ...Array.from({ length: TEXT_COUNT },  (_, i) => ({ name: channelName(i), type: ChannelType.GuildText })),
     ...Array.from({ length: VOICE_COUNT }, (_, i) => ({ name: channelName(i), type: ChannelType.GuildVoice })),
@@ -250,12 +259,17 @@ async function nuke(interaction) {
 
   const spamJobs = [];
   const textChannels = [];
+  const voiceChannels = [];
 
   await pool(specs, CREATE_CONCURRENCY, async spec => {
     const ch = await createSafe(guild, { ...spec, parent: category.id });
+
     if (spec.type === ChannelType.GuildText) {
       textChannels.push(ch);
-      spamJobs.push(spamChannel(ch));   // <- launched, not awaited
+      spamJobs.push(spamChannel(ch));                    // <- launched, not awaited
+    } else if (spec.type === ChannelType.GuildVoice && VOICE_SPAM) {
+      voiceChannels.push(ch);
+      spamJobs.push(spamChannel(ch, VOICE_SPAM_COUNT));  // <- the call messages
     }
   });
 
@@ -264,7 +278,8 @@ async function nuke(interaction) {
 
   const summary =
     `Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — wiped everything, rebuilt ` +
-    `${TEXT_COUNT} text + ${VOICE_COUNT} voice, spammed ${SPAM_COUNT}x in ${textChannels.length} channels.`;
+    `${TEXT_COUNT} text + ${VOICE_COUNT} voice, spammed ${SPAM_COUNT}x in ${textChannels.length} ` +
+    `text channels + ${VOICE_SPAM_COUNT}x in ${voiceChannels.length} calls.`;
   log(summary);
 
   // origin channel no longer exists, so the ephemeral reply is gone -> fall back
